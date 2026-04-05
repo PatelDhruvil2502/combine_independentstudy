@@ -1,0 +1,6 @@
+stage,ram_mb,total_mb,status,latency_ms,p50,p95,p99,majflt,minflt,io_read_mb,io_write_mb,vm_rss_kb,vm_swap_kb
+Comfortable (110% RSS),293,560,RAM only,0.16342252006000005,0.149467,0.216398,0.240926,0,25,0.0,0.0,273776,0
+Mild pressure (75% RSS),200,467,Swapping (52 MB),0.1383657475599999,0.136386,0.148779,0.151314,500,1103,2.7,0.0,220028,53768
+Moderate swap (50% RSS),133,400,Swapping (119 MB),0.1445930333999999,0.141177,0.155665,0.162503,4353,61580,20.54,0.0,147836,121868
+Heavy swap (30% RSS),80,347,Swapping (169 MB),5.2587514274,5.239003,5.318673,5.33484,8655621,58744405,33878.75,0.0,99148,174052
+Severe thrashing (15% RSS),40,307,Failed/Timeout,,,,,,,,,,
