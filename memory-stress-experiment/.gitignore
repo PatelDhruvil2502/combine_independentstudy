@@ -1,0 +1,8 @@
+venv/
+__pycache__/
+*.pyc
+.env
+*.egg-info/
+.idea/
+.vscode/
+true_memory_crash_plot.png

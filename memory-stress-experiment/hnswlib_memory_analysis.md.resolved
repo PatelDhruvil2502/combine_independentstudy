@@ -1,0 +1,98 @@
+# Understanding hnswlib Data Storage at the Code Level
+
+You asked to understand *exactly* how data is stored at the code level inside `hnswlib`, line-by-line. 
+
+To answer this, I downloaded the actual C++ source code for `hnswlib` and analyzed the core file, [hnswalg.h](file:///tmp/hnswlib/hnswlib/hnswalg.h). This is the header-only file where the entire Vector Database is implemented.
+
+Here is the exact breakdown of how your vectors are stored in memory under the hood.
+
+## 1. The Real Memory Layout (The Constructor)
+When you call `index.init_index(max_elements, ...)` in Python, you are actually triggering the [HierarchicalNSW](file:///tmp/hnswlib/hnswlib/hnswalg.h#89-145) C++ constructor (around line 89 in [hnswalg.h](file:///tmp/hnswlib/hnswlib/hnswalg.h)). 
+
+Here is how it reserves memory:
+
+```cpp
+// Line 120: Calculate how many bytes each element needs in the base layer (Layer 0)
+size_links_level0_ = maxM0_ * sizeof(tableint) + sizeof(linklistsizeint);
+size_data_per_element_ = size_links_level0_ + data_size_ + sizeof(labeltype);
+
+// Line 126: Allocate one massive block of RAM for the Base Layer!
+data_level0_memory_ = (char *) malloc(max_elements_ * size_data_per_element_);
+
+// Line 138: Allocate pointers for the top layers (the actual "Graph" part)
+linkLists_ = (char **) malloc(sizeof(void *) * max_elements_);
+```
+
+**What is happening here?**
+*   `hnswlib` is extremely clever. For the **Base Layer (Layer 0)**, which holds every single vector, it actually *does* use a massive, contiguous block of memory (`data_level0_memory_`), just like a NumPy array!
+*   Each "chunk" in this block (`size_data_per_element_`) holds exactly 3 things glued together: 
+    1. The neighbor links (memory addresses of closest points)
+    2. The raw vector data itself (`data_size_` is 128 floats * 4 bytes = 512 bytes)
+    3. The label (the ID of the vector)
+*   For the **Upper Layers** of the graph (which are used for the fast jumping during a search), it creates an array of pointers (`linkLists_`). These pointers will point to small, fragmented memory blocks scattered across the heap.
+
+## 2. Inserting a Vector (The [addPoint](file:///tmp/hnswlib/hnswlib/hnswalg.h#1153-1268) Method)
+When you call `index.add_items()` in Python, you trigger [addPoint()](file:///tmp/hnswlib/hnswlib/hnswalg.h#1153-1268) (Line 1153 in [hnswalg.h](file:///tmp/hnswlib/hnswlib/hnswalg.h)). Let's read the exact lines where your vector is saved to RAM.
+
+```cpp
+// Line 1181: Assign an internal ID to the new vector
+cur_c = cur_element_count; 
+cur_element_count++;
+
+// Line 1200: Clear the memory space reserved for this specific vector in the Base Layer block
+memset(data_level0_memory_ + cur_c * size_data_per_element_ + offsetLevel0_, 0, size_data_per_element_);
+
+// Line 1203: Copy the Label (ID) into the Base Layer block
+memcpy(getExternalLabeLp(cur_c), &label, sizeof(labeltype));
+
+// Line 1204: Copy the actual Vector floats into the Base Layer block
+memcpy(getDataByInternalId(cur_c), data_point, data_size_);
+```
+
+**What is happening here?**
+*   The raw float values of your vector are copied (`memcpy`) directly into the pre-allocated contiguous `data_level0_memory_` block. 
+*   Because `data_level0_memory_` was allocated all at once, the actual vectors are stored sequentially in RAM!
+
+## 3. Building the Fragmented Graph 
+If the vectors are stored sequentially, why did we see fragmentation and latency spikes in the previous tests? 
+
+The answer is in the very next lines of [addPoint](file:///tmp/hnswlib/hnswlib/hnswalg.h#1153-1268):
+
+```cpp
+// Line 1206: If this vector is selected to be in the "Upper Layers" of the Small World Graph
+if (curlevel) {
+    // Line 1207: Allocate a small, fragmented memory block JUST for this node's Graph Links
+    linkLists_[cur_c] = (char *) malloc(size_links_per_element_ * curlevel + 1);
+    memset(linkLists_[cur_c], 0, size_links_per_element_ * curlevel + 1);
+}
+```
+
+**What is happening here?**
+*   The `hnswlib` algorithm randomly promotes some vectors to higher "layers" of the graph so it can build the fast search highways. 
+*   When a vector is promoted, `hnswlib` uses `malloc()` to request a tiny bit of memory to store the links (pointers) for that upper layer.
+*   Because these `malloc()` calls happen one-by-one over time as you insert 100,000 items, the OS places them randomly all over the heap. This creates the **Fragmented Memory**.
+
+## 4. The Search Process ([searchKnn](file:///tmp/hnswlib/hnswlib/hnswalg.h#1270-1325))
+When you search the index, the code drops into [searchKnn()](file:///tmp/hnswlib/hnswlib/hnswalg.h#1270-1325). Here is the memory access pattern:
+
+```cpp
+// Line 1284: Fetch the fragmented pointer block to get the list of neighbors in the upper layer
+data = (unsigned int *) get_linklist(currObj, level);
+
+// Line 1290: Loop through all neighbors
+for (int i = 0; i < size; i++) {
+    // cand is the internal ID of the neighbor
+    tableint cand = datal[i]; 
+    
+    // Line 1294: Calculate the distance by jumping back to the Base Layer contiguous memory!
+    dist_t d = fstdistfunc_(query_data, getDataByInternalId(cand), dist_func_param_);
+}
+```
+
+**The Final Conclusion:**
+Your simulation in Python was incredibly accurate to the spirit of the problem, but here is the exact hardware truth inside C++:
+1. The **Vectors themselves** are stored sequentially in one massive `malloc` chunk.
+2. The **HNSW Graph Links** for the fast upper layers are scattered chaotically across the heap in thousands of tiny `malloc` chunks. 
+3. When the search jumps from neighbor to neighbor, it reads a scattered link pointer, then jumps into the massive sequential vector block to do the math, then reads another scattered pointer, then jumps to a completely different spot in the vector block.
+
+It is this constant, erratic jumping between the scattered `linkLists_` pointers and erratic random offsets in `data_level0_memory_` that causes SSD Thrashing when your Docker container runs out of physical RAM.
