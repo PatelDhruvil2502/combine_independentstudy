@@ -3,17 +3,18 @@ import time
 import numpy as np
 import hnswlib
 
+
 def main():
     # --- Configurable parameters via environment variables ---
     k = int(os.getenv("HNSW_K", "20"))
     ef = int(os.getenv("HNSW_EF", "100"))
     M = int(os.getenv("HNSW_M", "16"))
     ef_construction = int(os.getenv("HNSW_EF_CONSTRUCTION", "64"))
-    num_queries_total = int(os.getenv("HNSW_NUM_QUERIES", "1000000"))
+    num_queries_total = int(os.getenv("HNSW_NUM_QUERIES", "50000"))
     num_threads = int(os.getenv("HNSW_NUM_THREADS", "1"))
-    eval_batch_size = int(os.getenv("HNSW_BATCH_SIZE", "5000"))
-    num_recall_samples = int(os.getenv("HNSW_RECALL_SAMPLES", "200"))
+    eval_batch_size = int(os.getenv("HNSW_BATCH_SIZE", "2000"))
     seed = int(os.getenv("HNSW_SEED", "42"))
+    warmup_batches = int(os.getenv("HNSW_WARMUP_BATCHES", "3"))
 
     print("Loading real_world_dataset.npy...")
     train_data = np.load("/app/real_world_dataset.npy")
@@ -38,36 +39,35 @@ def main():
     index.add_items(train_data, np.arange(num_elements))
     index.set_ef(ef)
 
-    # --- Recall@k measurement (brute-force ground truth) ---
-    print(f"Computing recall@{k} on {num_recall_samples} sample queries...")
-    recall_idx = rng.choice(num_queries_total, size=num_recall_samples, replace=False)
-    recall_queries = queries[recall_idx]
+    # --- Warmup: run a few batches to stabilize caches, not timed ---
+    if warmup_batches > 0:
+        print(f"Running {warmup_batches} warmup batches...")
+        warmup_order = rng.permutation(num_queries_total)
+        for i in range(warmup_batches):
+            start = (i * eval_batch_size) % num_queries_total
+            end = min(start + eval_batch_size, num_queries_total)
+            batch_idx = warmup_order[start:end]
+            index.knn_query(queries[batch_idx], k=k, num_threads=num_threads)
 
-    # Vectorised exact L2: ||a - b||^2 = ||a||^2 + ||b||^2 - 2*(a . b)
-    train_sq = (train_data ** 2).sum(axis=1)           # (N,)
-    query_sq = (recall_queries ** 2).sum(axis=1)        # (n,)
-    dot = recall_queries @ train_data.T                  # (n, N)
-    dists = train_sq[None, :] + query_sq[:, None] - 2.0 * dot
-    true_neighbors = np.argsort(dists, axis=1)[:, :k]   # (n, k)
-
-    hnsw_labels, _ = index.knn_query(recall_queries, k=k, num_threads=num_threads)
-    hits = sum(
-        len(set(true_neighbors[i]) & set(hnsw_labels[i]))
-        for i in range(num_recall_samples)
-    )
-    recall = hits / (num_recall_samples * k)
-    print(f"RECALL,{recall:.6f}")
-
-    # --- Read page faults BEFORE search ---
+    # --- Snapshot page faults + I/O BEFORE timed search ---
     majflt_before = 0
+    minflt_before = 0
+    io_read_before = 0
+    io_write_before = 0
     try:
-        with open("/proc/self/status") as f:
-            for line in f:
-                if line.startswith("voluntary_ctxt_switches"):
-                    break
         with open("/proc/self/stat") as f:
             fields = f.read().split()
-            majflt_before = int(fields[11])  # field 12 (0-indexed 11) is majflt
+            minflt_before = int(fields[9])   # field 10 (0-indexed 9) = minflt
+            majflt_before = int(fields[11])  # field 12 (0-indexed 11) = majflt
+    except Exception:
+        pass
+    try:
+        with open("/proc/self/io") as f:
+            for line in f:
+                if line.startswith("read_bytes:"):
+                    io_read_before = int(line.split()[1])
+                elif line.startswith("write_bytes:"):
+                    io_write_before = int(line.split()[1])
     except Exception:
         pass
 
@@ -95,16 +95,34 @@ def main():
     p99 = float(np.percentile(arr, 99))
     print(f"LATENCY_STATS,{p50:.6f},{p95:.6f},{p99:.6f}")
 
-    # --- Page faults AFTER search ---
+    # --- Snapshot page faults + I/O AFTER timed search ---
     majflt_after = 0
+    minflt_after = 0
+    io_read_after = 0
+    io_write_after = 0
     try:
         with open("/proc/self/stat") as f:
             fields = f.read().split()
+            minflt_after = int(fields[9])
             majflt_after = int(fields[11])
     except Exception:
         pass
-    majflt_during_search = majflt_after - majflt_before
-    print(f"PAGE_FAULTS,{majflt_during_search}")
+    try:
+        with open("/proc/self/io") as f:
+            for line in f:
+                if line.startswith("read_bytes:"):
+                    io_read_after = int(line.split()[1])
+                elif line.startswith("write_bytes:"):
+                    io_write_after = int(line.split()[1])
+    except Exception:
+        pass
+
+    majflt_delta = majflt_after - majflt_before
+    minflt_delta = minflt_after - minflt_before
+    io_read_mb = (io_read_after - io_read_before) / (1024 * 1024)
+    io_write_mb = (io_write_after - io_write_before) / (1024 * 1024)
+    print(f"PAGE_FAULTS,{majflt_delta},{minflt_delta}")
+    print(f"IO_STATS,{io_read_mb:.2f},{io_write_mb:.2f}")
 
     # --- Memory stats ---
     vm_rss_kb = 0
@@ -128,6 +146,7 @@ def main():
 
     print(f"MEMORY_LAYOUT,{q_start},{q_size_mb:.1f},{t_start},{t_size_mb:.1f}")
     print(f"RESULT,{latency_ms},{vm_rss_kb},{vm_swap_kb}")
+
 
 if __name__ == "__main__":
     main()
