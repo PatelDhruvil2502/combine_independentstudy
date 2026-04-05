@@ -12,7 +12,7 @@ This repository contains two experiments investigating HNSW performance under di
 
 Measures how HNSW query latency degrades as available RAM is progressively reduced below the index size. Uses Docker containers with capped memory to force OS paging and observe swap thrashing, tail-latency spikes, and eventual OOM crashes.
 
-**Metrics collected:** mean latency, p50/p95/p99 tail latency, recall@k, major page faults, VmRSS/VmSwap.
+**Metrics collected:** mean latency, p50/p95/p99 tail latency, major/minor page faults, disk I/O, VmRSS/VmSwap.
 
 ```bash
 cd memory-stress-experiment
