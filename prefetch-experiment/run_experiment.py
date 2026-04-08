@@ -625,9 +625,14 @@ def main():
     csv_path = out_dir / "raw_results.csv"
     write_csv(rows, csv_path)
 
-    n = 1
-    while (out_dir / f"output_{n}.png").exists():
-        n += 1
+    MAX_IMAGES = 5
+    existing = sorted(out_dir.glob("output_*.png"))
+    if len(existing) < MAX_IMAGES:
+        n = len(existing) + 1
+    else:
+        # Replace the oldest image (by modification time)
+        oldest = min(existing, key=lambda p: p.stat().st_mtime)
+        n = int(oldest.stem.split("_")[1])
     plot_path = out_dir / f"output_{n}.png"
     plot_comparison(rows, plot_path, ef=args.ef, num_elements=num_elements, dim=dim)
     print_raw_results(rows)

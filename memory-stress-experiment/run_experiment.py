@@ -277,8 +277,18 @@ def run_experiment(image_name, args):
         fontsize=13, fontweight='bold'
     )
     fig.tight_layout()
-    fig.savefig("results/memory_stress_plot.png", dpi=300)
-    print(f"\nPlot saved: results/memory_stress_plot.png")
+    MAX_IMAGES = 5
+    results_dir = "results"
+    from pathlib import Path
+    existing = sorted(Path(results_dir).glob("memory_stress_plot_*.png"))
+    if len(existing) < MAX_IMAGES:
+        n = len(existing) + 1
+    else:
+        oldest = min(existing, key=lambda p: p.stat().st_mtime)
+        n = int(oldest.stem.split("_")[-1])
+    plot_path = f"{results_dir}/memory_stress_plot_{n}.png"
+    fig.savefig(plot_path, dpi=300)
+    print(f"\nPlot saved: {plot_path}")
     plt.close(fig)
 
 
