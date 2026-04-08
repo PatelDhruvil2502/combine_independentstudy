@@ -463,15 +463,29 @@ def plot_scaling(scaling_data, out_path):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def print_raw_results(rows):
-    print("\n=== Raw Measured Results ===")
-    header = "cycle,order_first,mode,latency_ms,p50_ms,p95_ms,p99_ms,recall,vm_rss_kb,vm_swap_kb"
-    print(header)
+    print("\n=== Raw Measured Results ===\n")
+    headers = ["Cycle", "Order", "Mode", "Latency(ms)", "P50(ms)", "P95(ms)", "P99(ms)", "Recall", "RSS(KB)", "Swap(KB)"]
+    col_data = []
     for r in rows:
-        print(
-            f"{r['cycle']},{r['order_first']},{r['mode']},"
-            f"{r['latency_ms']},{r['p50_ms']},{r['p95_ms']},{r['p99_ms']},"
-            f"{r['recall']},{r['vm_rss_kb']},{r['vm_swap_kb']}"
-        )
+        col_data.append([
+            str(r['cycle']),
+            r['order_first'],
+            r['mode'].upper(),
+            f"{r['latency_ms']:.4f}",
+            f"{r['p50_ms']:.4f}",
+            f"{r['p95_ms']:.4f}",
+            f"{r['p99_ms']:.4f}",
+            f"{r['recall']:.4f}",
+            str(r['vm_rss_kb']),
+            str(r['vm_swap_kb']),
+        ])
+    widths = [max(len(h), *(len(row[i]) for row in col_data)) for i, h in enumerate(headers)]
+    fmt = " | ".join(f"{{:<{w}}}" for w in widths)
+    sep = "-+-".join("-" * w for w in widths)
+    print(fmt.format(*headers))
+    print(sep)
+    for row in col_data:
+        print(fmt.format(*row))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
