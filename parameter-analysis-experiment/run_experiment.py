@@ -238,28 +238,29 @@ def plot_results(all_results, out_path, defaults):
     ax.set_title("Effect of Dimension on Latency\n(synthetic data, N=50K)")
     ax.grid(True, alpha=0.3)
 
-    # Panel 6: Summary annotations
+    # Panel 6: Summary computed from actual measured data
     ax = axes[1, 2]
     ax.axis("off")
-    summary = (
-        "Key Observations\n"
-        "─────────────────────────\n\n"
-        "k (neighbors):\n"
-        "  Minimal impact — selecting top-k\n"
-        "  from candidates is cheap.\n\n"
-        "ef (search beam):\n"
-        "  Strongest factor — more candidates\n"
-        "  explored = more graph traversals.\n\n"
-        "M (connectivity):\n"
-        "  Higher M = fewer levels but larger\n"
-        "  graph per node. Trade-off.\n\n"
-        "Dataset size (N):\n"
-        "  Sub-linear growth (log N levels).\n"
-        "  HNSW scales well.\n\n"
-        "Dimension (d):\n"
-        "  Linear impact — each distance\n"
-        "  computation reads d×4 bytes."
-    )
+
+    def _latency_range(param_name):
+        d = [r for r in all_results if r["param"] == param_name]
+        if not d:
+            return 0, 0, 0
+        lats = [r["latency_ms"] for r in d]
+        return min(lats), max(lats), (max(lats) - min(lats)) / min(lats) * 100
+
+    lines = ["Measured Impact Summary", "─" * 28, ""]
+    for name, label in [("k", "k (neighbors)"), ("ef", "ef (search beam)"),
+                         ("M", "M (connectivity)"), ("N", "Dataset size"),
+                         ("dim", "Dimension")]:
+        lo, hi, pct = _latency_range(name)
+        if lo > 0:
+            lines.append(f"{label}:")
+            lines.append(f"  {lo:.3f} → {hi:.3f} ms")
+            lines.append(f"  ({pct:.0f}% increase across range)")
+            lines.append("")
+
+    summary = "\n".join(lines)
     ax.text(0.05, 0.95, summary, transform=ax.transAxes,
             fontsize=10, verticalalignment='top', fontfamily='monospace',
             bbox=dict(boxstyle='round,pad=0.5', facecolor='lightyellow',
