@@ -51,7 +51,6 @@ def parse_result(stdout):
         "latency_ms": None,
         "vm_rss_kb":  -1,
         "vm_swap_kb": -1,
-        "recall":     -1.0,
         "p50_ms":     -1.0,
         "p95_ms":     -1.0,
         "p99_ms":     -1.0,
@@ -65,8 +64,6 @@ def parse_result(stdout):
                 result["vm_rss_kb"] = int(parts[2])
             if len(parts) > 3:
                 result["vm_swap_kb"] = int(parts[3])
-        elif line.startswith("RECALL,"):
-            result["recall"] = float(line.split(",")[1])
         elif line.startswith("LATENCY_STATS,"):
             parts = line.split(",")
             result["p50_ms"] = float(parts[1])
@@ -95,7 +92,6 @@ def run_once(
     chunk_size,
     ef_construction,
     M,
-    recall_samples,
     index_size,
 ):
     dataset_abs = str(dataset_path.resolve())
@@ -111,7 +107,6 @@ def run_once(
         "-e", f"HNSW_CHUNK_SIZE={chunk_size}",
         "-e", f"HNSW_EF_CONSTRUCTION={ef_construction}",
         "-e", f"HNSW_M={M}",
-        "-e", f"HNSW_RECALL_SAMPLES={recall_samples}",
         "-e", f"HNSW_INDEX_SIZE={index_size}",
         "-v", f"{dataset_abs}:/app/real_world_dataset.npy:ro",
     ]
@@ -169,7 +164,7 @@ def run_benchmark(
         batch_size=batch_size, query_noise=query_noise,
         memory_limit=memory_limit, memory_swap=memory_swap,
         seed=seed, chunk_size=chunk_size, ef_construction=ef_construction,
-        M=M, recall_samples=recall_samples, index_size=index_size,
+        M=M, index_size=index_size,
     )
 
     rows = []
@@ -197,7 +192,6 @@ def run_benchmark(
                 "p50_ms":      parsed["p50_ms"],
                 "p95_ms":      parsed["p95_ms"],
                 "p99_ms":      parsed["p99_ms"],
-                "recall":      parsed["recall"],
                 "vm_rss_kb":   parsed["vm_rss_kb"],
                 "vm_swap_kb":  parsed["vm_swap_kb"],
                 "raw_log":     str(log_path),
@@ -213,7 +207,7 @@ def run_scaling_sweep(
     image_on, image_off, dataset_path, index_sizes,
     timeout_s, num_queries, ef, k, num_threads, batch_size,
     query_noise, memory_limit, memory_swap, seed, chunk_size,
-    ef_construction, M, recall_samples, sweep_runs, sweep_warmup, out_dir,
+    ef_construction, M, sweep_runs, sweep_warmup, out_dir,
 ):
     import statistics
     scaling_data = []
@@ -250,7 +244,7 @@ def write_csv(rows, csv_path):
     fields = [
         "cycle", "order_first", "mode",
         "latency_ms", "p50_ms", "p95_ms", "p99_ms",
-        "recall", "vm_rss_kb", "vm_swap_kb", "raw_log",
+        "vm_rss_kb", "vm_swap_kb", "raw_log",
     ]
     with csv_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -297,16 +291,11 @@ def plot_comparison(rows, out_path, ef, num_elements, dim):
     off_p95 = _safe_mean([r["p95_ms"] for r in off_rows])
     off_p99 = _safe_mean([r["p99_ms"] for r in off_rows])
 
-    on_recall  = _safe_mean([r["recall"] for r in on_rows])
-    off_recall = _safe_mean([r["recall"] for r in off_rows])
-    has_percentiles = on_p50 > 0
-    has_recall      = on_recall > 0
-
     color_on  = "#2196F3"
     color_off = "#F44336"
 
     n_label = f"{num_elements // 1000} K" if num_elements >= 1000 else str(num_elements)
-    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle(
         "HNSW Prefetch ON vs OFF — Per-query Latency Benchmark\n"
         f"({n_label} vectors · {dim}-dim · ef={ef} · real measured runs)",
@@ -353,35 +342,6 @@ def plot_comparison(rows, out_path, ef, num_elements, dim):
     ax2.legend(fontsize=8)
     ax2.grid(axis="y", alpha=0.3)
     ax2.set_xticks(on_idx)
-
-    # ── Panel 3: Recall@k parity ──────────────────────────────────────────────
-    ax3 = axes[2]
-    if has_recall:
-        k_val = int(round(1 / max(on_recall, off_recall, 0.0001)))  # rough estimate; label comes from row
-        r_bars = ax3.bar(
-            ["Prefetch ON", "Prefetch OFF"],
-            [on_recall, off_recall],
-            color=[color_on, color_off],
-            width=0.45,
-            alpha=0.85,
-        )
-        for bar, val in zip(r_bars, [on_recall, off_recall]):
-            ax3.text(
-                bar.get_x() + bar.get_width() / 2,
-                val + 0.005,
-                f"{val:.4f}",
-                ha="center", va="bottom", fontsize=11, fontweight="bold",
-            )
-        ax3.set_ylim(0, 1.15)
-        ax3.set_ylabel("Recall@k")
-        ax3.set_title("Search quality parity\n(prefetch must not change results)")
-        ax3.grid(axis="y", alpha=0.3)
-        ax3.axhline(1.0, color="gray", linestyle="--", linewidth=1, alpha=0.5, label="Perfect recall")
-        ax3.legend(fontsize=8)
-    else:
-        ax3.text(0.5, 0.5, "Recall data not available\n(update worker to latest version)",
-                 ha="center", va="center", transform=ax3.transAxes, fontsize=10)
-        ax3.set_title("Recall@k")
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -464,7 +424,7 @@ def plot_scaling(scaling_data, out_path):
 
 def print_raw_results(rows):
     print("\n=== Raw Measured Results ===\n")
-    headers = ["Cycle", "Order", "Mode", "Latency(ms)", "P50(ms)", "P95(ms)", "P99(ms)", "Recall", "RSS(KB)", "Swap(KB)"]
+    headers = ["Cycle", "Order", "Mode", "Latency(ms)", "P50(ms)", "P95(ms)", "P99(ms)", "RSS(KB)", "Swap(KB)"]
     col_data = []
     for r in rows:
         col_data.append([
@@ -475,7 +435,6 @@ def print_raw_results(rows):
             f"{r['p50_ms']:.4f}",
             f"{r['p95_ms']:.4f}",
             f"{r['p99_ms']:.4f}",
-            f"{r['recall']:.4f}",
             str(r['vm_rss_kb']),
             str(r['vm_swap_kb']),
         ])
@@ -510,7 +469,6 @@ def main():
     parser.add_argument("--chunk-size",       type=int,   default=50000, help="Query generation chunk size inside worker")
     parser.add_argument("--ef-construction",  type=int,   default=100,   help="HNSW ef_construction parameter (graph build quality)")
     parser.add_argument("--hnsw-m",           type=int,   default=32,    help="HNSW M parameter (graph connectivity)")
-    parser.add_argument("--recall-samples",   type=int,   default=200,   help="Queries used for recall@k ground-truth check")
     parser.add_argument("--index-size",       type=int,   default=0,     help="Subset the dataset to this many vectors (0 = full)")
     parser.add_argument("--python-version",   default="3.10-slim",       help="Python Docker image tag (e.g. 3.11-slim)")
     # Scaling sweep
@@ -552,8 +510,6 @@ def main():
         raise ValueError("--ef-construction must be >= 1")
     if args.hnsw_m < 1:
         raise ValueError("--hnsw-m must be >= 1")
-    if args.recall_samples < 1:
-        raise ValueError("--recall-samples must be >= 1")
     if args.sweep_runs < 1:
         raise ValueError("--sweep-runs must be >= 1")
 
@@ -626,7 +582,6 @@ def main():
         chunk_size=args.chunk_size,
         ef_construction=args.ef_construction,
         M=args.hnsw_m,
-        recall_samples=args.recall_samples,
     )
 
     # ── Main benchmark ────────────────────────────────────────────────────────
