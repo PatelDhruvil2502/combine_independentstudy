@@ -4,7 +4,7 @@
 **Faculty Mentor:** Prof. Feng Chen
 **Course:** CSCI-Y790, Spring 2026
 
-This repository contains two experiments investigating HNSW performance under different conditions.
+This repository contains three experiments investigating HNSW performance under different conditions.
 
 ## Experiments
 
@@ -30,7 +30,19 @@ cd prefetch-experiment
 python3 run_experiment.py
 ```
 
+### 3. Parameter Analysis Experiment (`parameter-analysis-experiment/`)
+
+Sweeps over HNSW parameters (k, ef, M, dataset size, dimension) to show how each factor affects query latency. Also computes expected HNSW levels for M and N sweeps. Runs locally without Docker.
+
+**Factors analyzed:** number of neighbors (k), search beam width (ef), graph connectivity (M), dataset size (N), vector dimension (d).
+
+```bash
+cd parameter-analysis-experiment
+pip install hnswlib
+python3 run_experiment.py
+```
+
 ## Requirements
 
-- Docker Desktop (with `linux/amd64` support / Rosetta 2 on Apple Silicon)
-- Python 3.10+ with `matplotlib` and `numpy`
+- Docker Desktop (with `linux/amd64` support / Rosetta 2 on Apple Silicon) — for experiments 1 & 2
+- Python 3.10+ with `matplotlib`, `numpy`, and `hnswlib`
