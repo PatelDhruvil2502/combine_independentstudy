@@ -155,7 +155,6 @@ def run_benchmark(
     chunk_size,
     ef_construction,
     M,
-    recall_samples,
     index_size=0,
 ):
     _run_args = dict(
@@ -219,7 +218,7 @@ def run_scaling_sweep(
             sweep_runs, sweep_warmup, timeout_s, sweep_dir,
             num_queries, ef, k, num_threads, batch_size, query_noise,
             memory_limit, memory_swap, seed, chunk_size, ef_construction, M,
-            recall_samples, idx_size,
+            idx_size,
         )
         on_vals  = [r["latency_ms"] for r in rows if r["mode"] == "on"]
         off_vals = [r["latency_ms"] for r in rows if r["mode"] == "off"]
