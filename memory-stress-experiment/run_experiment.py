@@ -61,6 +61,19 @@ def parse_output(output_lines):
             parts = line.split(",")
             data["num_elements"] = int(parts[1])
             data["dim"] = int(parts[2])
+        elif line.startswith("CACHE_INFO,"):
+            parts = line.split(",")
+            data["L1d_kb"] = int(parts[1])
+            data["L2_kb"] = int(parts[2])
+            data["L3_kb"] = int(parts[3])
+        elif line.startswith("WORKING_SET,"):
+            parts = line.split(",")
+            data["per_query_ws_kb"] = float(parts[1])
+            data["total_index_mb"] = float(parts[2])
+            data["index_data_mb"] = float(parts[3])
+            data["index_graph_mb"] = float(parts[4])
+        elif line.startswith("HIT_RATIO,"):
+            data["hit_ratio"] = float(line.split(",")[1])
     return data
 
 
@@ -113,6 +126,34 @@ def run_experiment(image_name, args):
     print(f"  Probe latency: {data['latency_ms']:.4f} ms/query")
     print(f"  Probe majflt: {data.get('majflt', 0)} | minflt: {data.get('minflt', 0)}")
 
+    # ── CPU Cache & Working Set Analysis ────────────────────────────────────
+    l1d = data.get("L1d_kb", 0)
+    l2 = data.get("L2_kb", 0)
+    l3 = data.get("L3_kb", 0)
+    pq_ws = data.get("per_query_ws_kb", 0)
+    idx_total = data.get("total_index_mb", 0)
+    idx_data = data.get("index_data_mb", 0)
+    idx_graph = data.get("index_graph_mb", 0)
+
+    if l1d > 0 or l2 > 0:
+        print(f"\n--- CPU Cache Analysis ---")
+        print(f"  L1d cache:  {l1d} KB")
+        print(f"  L2 cache:   {l2} KB")
+        print(f"  L3 cache:   {l3} KB")
+        print(f"  Per-query working set (ef={args.ef} nodes): {pq_ws:.1f} KB")
+        print(f"  Index memory footprint: {idx_total:.1f} MB  (vectors: {idx_data:.1f} MB, graph links: {idx_graph:.1f} MB)")
+        if l1d > 0:
+            print(f"  L1d utilization: {min(100, pq_ws / l1d * 100):.0f}% of L1d per query "
+                  f"({'FITS' if pq_ws <= l1d else 'OVERFLOWS -> L2 spill'})")
+        if l2 > 0:
+            print(f"  L2 utilization:  {min(100, pq_ws / l2 * 100):.0f}% of L2 per query "
+                  f"({'FITS' if pq_ws <= l2 else 'OVERFLOWS -> L3 spill'})")
+        if l3 > 0:
+            idx_total_kb = idx_total * 1024
+            print(f"  L3 utilization:  {min(100, idx_total_kb / l3 * 100):.0f}% of L3 for full index "
+                  f"({'FITS' if idx_total_kb <= l3 else 'OVERFLOWS -> RAM spill'})")
+    print(f"  Probe hit ratio: {data.get('hit_ratio', 1.0):.4f}")
+
     # ── Design stages to guarantee: RAM-only -> Swapping -> OOM Crash ────────
     #
     # The key insight: we need the HNSW index pages to get evicted from RAM.
@@ -133,7 +174,7 @@ def run_experiment(image_name, args):
     header = (
         f"{'Stage':<30} | {'RAM':<7} | {'Total':<7} | {'Status':<20} | "
         f"{'Latency':<10} | {'p50':<8} | {'p95':<8} | {'p99':<8} | "
-        f"{'MajFlt':<8} | {'IO Read':<8}"
+        f"{'MajFlt':<8} | {'IO Read':<8} | {'HitRatio':<8}"
     )
     print(f"\n--- Memory Stress Test ({len(stages)} stages) ---")
     print(header)
@@ -157,7 +198,7 @@ def run_experiment(image_name, args):
             print(
                 f"{stage['label']:<30} | {current_ram:<7} | {current_total:<7} | "
                 f"{status:<20} | {'-':<10} | {'-':<8} | {'-':<8} | {'-':<8} | "
-                f"{'-':<8} | {'-':<8}"
+                f"{'-':<8} | {'-':<8} | {'-':<8}"
             )
             crash_point = current_ram
             all_stage_data.append({
@@ -167,6 +208,7 @@ def run_experiment(image_name, args):
                 "majflt": None, "minflt": None,
                 "io_read_mb": None, "io_write_mb": None,
                 "vm_rss_kb": None, "vm_swap_kb": None,
+                "hit_ratio": 0.0,
             })
             break
 
@@ -179,12 +221,13 @@ def run_experiment(image_name, args):
         minflt = data.get("minflt", 0)
         io_read = data.get("io_read_mb", 0)
         io_write = data.get("io_write_mb", 0)
+        hit_ratio = data.get("hit_ratio", 1.0)
         status = "RAM only" if swap_kb == 0 else f"Swapping ({swap_kb // 1024} MB)"
 
         print(
             f"{stage['label']:<30} | {current_ram:<7} | {current_total:<7} | "
             f"{status:<20} | {latency:<10.4f} | {p50:<8.4f} | {p95:<8.4f} | {p99:<8.4f} | "
-            f"{majflt:<8} | {io_read:<8.1f}"
+            f"{majflt:<8} | {io_read:<8.1f} | {hit_ratio:<8.4f}"
         )
 
         plot_limits.append(current_ram)
@@ -198,6 +241,7 @@ def run_experiment(image_name, args):
             "majflt": majflt, "minflt": minflt,
             "io_read_mb": io_read, "io_write_mb": io_write,
             "vm_rss_kb": data.get("vm_rss_kb", 0), "vm_swap_kb": swap_kb,
+            "hit_ratio": hit_ratio,
         })
 
     # ── Save outputs to results/ folder ────────────────────────────────────
