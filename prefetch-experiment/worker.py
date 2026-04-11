@@ -1,7 +1,42 @@
 import time
 import os
+import subprocess
 import numpy as np
 import hnswlib
+
+
+def get_cache_sizes():
+    """Detect CPU cache sizes (L1d, L2, L3) in KB from sysfs or getconf."""
+    caches = {"L1d": 0, "L2": 0, "L3": 0}
+    try:
+        for idx in range(4):
+            base = f"/sys/devices/system/cpu/cpu0/cache/index{idx}"
+            if not os.path.exists(base):
+                continue
+            with open(f"{base}/level") as f:
+                level = int(f.read().strip())
+            with open(f"{base}/type") as f:
+                ctype = f.read().strip()
+            with open(f"{base}/size") as f:
+                s = f.read().strip()
+                size_kb = int(s[:-1]) * (1024 if s.endswith("M") else 1) if s[-1] in "KM" else int(s) // 1024
+            if level == 1 and ctype == "Data":
+                caches["L1d"] = size_kb
+            elif level == 2:
+                caches["L2"] = size_kb
+            elif level == 3:
+                caches["L3"] = size_kb
+    except Exception:
+        pass
+    if caches["L1d"] == 0:
+        for key, param in [("L1d", "LEVEL1_DCACHE_SIZE"), ("L2", "LEVEL2_CACHE_SIZE"), ("L3", "LEVEL3_CACHE_SIZE")]:
+            try:
+                r = subprocess.run(["getconf", param], capture_output=True, text=True)
+                if r.returncode == 0 and r.stdout.strip().isdigit():
+                    caches[key] = int(r.stdout.strip()) // 1024
+            except Exception:
+                pass
+    return caches
 
 
 def main():
@@ -44,6 +79,18 @@ def main():
     index.add_items(train_data, np.arange(num_elements))
     index.set_ef(ef)
 
+    # --- CPU cache analysis ---
+    caches = get_cache_sizes()
+    bytes_per_vector = dim * 4
+    bytes_per_link_list = 2 * M * 4
+    bytes_per_node = bytes_per_vector + bytes_per_link_list
+    per_query_ws_kb = (ef * bytes_per_node) / 1024
+    index_data_mb = (num_elements * bytes_per_vector) / (1024 * 1024)
+    index_graph_mb = (num_elements * bytes_per_link_list) / (1024 * 1024)
+    total_index_mb = index_data_mb + index_graph_mb
+    print(f"CACHE_INFO,{caches['L1d']},{caches['L2']},{caches['L3']}")
+    print(f"WORKING_SET,{per_query_ws_kb:.1f},{total_index_mb:.1f},{index_data_mb:.1f},{index_graph_mb:.1f}")
+
     print("Starting timed search...")
     # Randomise batch order to defeat sequential OS prefetching and
     # ensure each batch touches a scattered region of the graph.
@@ -79,6 +126,11 @@ def main():
                     break
     except Exception:
         pass
+
+    # --- RAM hit ratio ---
+    total_mem_kb = vm_rss_kb + vm_swap_kb
+    ram_hit_ratio = vm_rss_kb / total_mem_kb if total_mem_kb > 0 else 1.0
+    print(f"HIT_RATIO,{ram_hit_ratio:.6f}")
 
     q_start   = hex(queries.__array_interface__["data"][0])
     q_size_mb = queries.nbytes / (1024 * 1024)

@@ -54,6 +54,14 @@ def parse_result(stdout):
         "p50_ms":     -1.0,
         "p95_ms":     -1.0,
         "p99_ms":     -1.0,
+        "hit_ratio":  -1.0,
+        "L1d_kb":     0,
+        "L2_kb":      0,
+        "L3_kb":      0,
+        "per_query_ws_kb": 0,
+        "total_index_mb":  0,
+        "index_data_mb":   0,
+        "index_graph_mb":  0,
     }
     for line in stdout.splitlines():
         line = line.strip()
@@ -69,7 +77,51 @@ def parse_result(stdout):
             result["p50_ms"] = float(parts[1])
             result["p95_ms"] = float(parts[2])
             result["p99_ms"] = float(parts[3])
+        elif line.startswith("HIT_RATIO,"):
+            result["hit_ratio"] = float(line.split(",")[1])
+        elif line.startswith("CACHE_INFO,"):
+            parts = line.split(",")
+            result["L1d_kb"] = int(parts[1])
+            result["L2_kb"] = int(parts[2])
+            result["L3_kb"] = int(parts[3])
+        elif line.startswith("WORKING_SET,"):
+            parts = line.split(",")
+            result["per_query_ws_kb"] = float(parts[1])
+            result["total_index_mb"] = float(parts[2])
+            result["index_data_mb"] = float(parts[3])
+            result["index_graph_mb"] = float(parts[4])
     return result if result["latency_ms"] is not None else None
+
+
+def _print_cache_analysis(data, ef):
+    """Print CPU cache and working set analysis from parsed worker output."""
+    l1d = data.get("L1d_kb", 0)
+    l2 = data.get("L2_kb", 0)
+    l3 = data.get("L3_kb", 0)
+    pq_ws = data.get("per_query_ws_kb", 0)
+    idx_total = data.get("total_index_mb", 0)
+    idx_data = data.get("index_data_mb", 0)
+    idx_graph = data.get("index_graph_mb", 0)
+    hit_ratio = data.get("hit_ratio", 1.0)
+
+    print(f"\n--- CPU Cache & Working Set Analysis ---")
+    print(f"  L1d cache:  {l1d} KB")
+    print(f"  L2 cache:   {l2} KB")
+    print(f"  L3 cache:   {l3} KB")
+    print(f"  Per-query working set (ef={ef} nodes): {pq_ws:.1f} KB")
+    print(f"  Index memory footprint: {idx_total:.1f} MB  (vectors: {idx_data:.1f} MB, graph links: {idx_graph:.1f} MB)")
+    if l1d > 0:
+        print(f"  L1d utilization: {min(100, pq_ws / l1d * 100):.0f}% of L1d per query "
+              f"({'FITS' if pq_ws <= l1d else 'OVERFLOWS -> L2 spill'})")
+    if l2 > 0:
+        print(f"  L2 utilization:  {min(100, pq_ws / l2 * 100):.0f}% of L2 per query "
+              f"({'FITS' if pq_ws <= l2 else 'OVERFLOWS -> L3 spill'})")
+    if l3 > 0:
+        idx_total_kb = idx_total * 1024
+        print(f"  L3 utilization:  {min(100, idx_total_kb / l3 * 100):.0f}% of L3 for full index "
+              f"({'FITS' if idx_total_kb <= l3 else 'OVERFLOWS -> RAM spill'})")
+    print(f"  RAM hit ratio: {hit_ratio:.4f}")
+    print()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -167,11 +219,15 @@ def run_benchmark(
     )
 
     rows = []
+    cache_printed = False
 
     # Warmup runs are discarded to reduce first-run cold-start bias.
     for i in range(warmup):
         print(f"Warmup {i + 1}/{warmup}: prefetch ON")
-        run_once(image_on, **_run_args)
+        parsed_warmup, _ = run_once(image_on, **_run_args)
+        if not cache_printed and parsed_warmup.get("L1d_kb", 0) > 0:
+            _print_cache_analysis(parsed_warmup, ef)
+            cache_printed = True
         print(f"Warmup {i + 1}/{warmup}: prefetch OFF")
         run_once(image_off, **_run_args)
 
@@ -182,6 +238,9 @@ def run_benchmark(
         for mode in order:
             image  = image_on if mode == "on" else image_off
             parsed, raw = run_once(image, **_run_args)
+            if not cache_printed and parsed.get("L1d_kb", 0) > 0:
+                _print_cache_analysis(parsed, ef)
+                cache_printed = True
             log_path = save_raw_log(out_dir, mode, cycle, raw)
             rows.append({
                 "cycle":       cycle,
@@ -191,6 +250,7 @@ def run_benchmark(
                 "p50_ms":      parsed["p50_ms"],
                 "p95_ms":      parsed["p95_ms"],
                 "p99_ms":      parsed["p99_ms"],
+                "hit_ratio":   parsed.get("hit_ratio", -1.0),
                 "vm_rss_kb":   parsed["vm_rss_kb"],
                 "vm_swap_kb":  parsed["vm_swap_kb"],
                 "raw_log":     str(log_path),
@@ -243,7 +303,7 @@ def write_csv(rows, csv_path):
     fields = [
         "cycle", "order_first", "mode",
         "latency_ms", "p50_ms", "p95_ms", "p99_ms",
-        "vm_rss_kb", "vm_swap_kb", "raw_log",
+        "hit_ratio", "vm_rss_kb", "vm_swap_kb", "raw_log",
     ]
     with csv_path.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fields)
@@ -423,7 +483,7 @@ def plot_scaling(scaling_data, out_path):
 
 def print_raw_results(rows):
     print("\n=== Raw Measured Results ===\n")
-    headers = ["Cycle", "Order", "Mode", "Latency(ms)", "P50(ms)", "P95(ms)", "P99(ms)", "RSS(KB)", "Swap(KB)"]
+    headers = ["Cycle", "Order", "Mode", "Latency(ms)", "P50(ms)", "P95(ms)", "P99(ms)", "HitRatio", "RSS(KB)", "Swap(KB)"]
     col_data = []
     for r in rows:
         col_data.append([
@@ -434,6 +494,7 @@ def print_raw_results(rows):
             f"{r['p50_ms']:.4f}",
             f"{r['p95_ms']:.4f}",
             f"{r['p99_ms']:.4f}",
+            f"{r['hit_ratio']:.4f}",
             str(r['vm_rss_kb']),
             str(r['vm_swap_kb']),
         ])
