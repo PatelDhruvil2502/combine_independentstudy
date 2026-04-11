@@ -1,5 +1,4 @@
 import os
-import math
 import time
 import argparse
 import csv
@@ -40,13 +39,6 @@ def generate_queries(data, num_queries=5000, noise=0.01, seed=42):
     rng = np.random.default_rng(seed)
     indices = rng.choice(len(data), size=num_queries, replace=True)
     return data[indices] + rng.normal(scale=noise, size=(num_queries, data.shape[1])).astype(np.float32)
-
-
-def expected_max_level(N, M):
-    """Expected max HNSW level: ln(N) / ln(M)."""
-    if N <= 0 or M <= 1:
-        return 0
-    return math.log(N) / math.log(M)
 
 
 def find_dataset():
@@ -92,21 +84,20 @@ def sweep_ef(data, queries, k=20, M=16, ef_construction=100, runs=5):
 
 
 def sweep_M(data, queries, k=20, ef=100, ef_construction=100, runs=5):
-    """How does graph connectivity (M) affect latency and HNSW levels?"""
+    """How does graph connectivity (M) affect latency?"""
     M_values = [4, 8, 16, 32, 64]
     results = []
     for M in M_values:
         index = build_index(data, ef_construction=ef_construction, M=M, ef=ef)
         mean, std = measure_latency(index, queries, k=k, runs=runs)
-        levels = expected_max_level(len(data), M)
-        print(f"  M={M:<5}  latency={mean:.4f} +/- {std:.4f} ms/query  expected_levels={levels:.1f}")
-        results.append({"param": "M", "value": M, "latency_ms": mean, "std_ms": std, "levels": levels})
+        print(f"  M={M:<5}  latency={mean:.4f} +/- {std:.4f} ms/query")
+        results.append({"param": "M", "value": M, "latency_ms": mean, "std_ms": std})
     return results
 
 
 def sweep_dataset_size(data, k=20, ef=100, M=16, ef_construction=100,
                        num_queries=10000, runs=5):
-    """How does dataset size (N) affect latency and HNSW levels?"""
+    """How does dataset size (N) affect latency?"""
     max_n = len(data)
     N_values = [s for s in [5000, 10000, 25000, 50000, 100000, 150000] if s <= max_n]
     results = []
@@ -115,9 +106,8 @@ def sweep_dataset_size(data, k=20, ef=100, M=16, ef_construction=100,
         q = generate_queries(subset, num_queries=num_queries)
         index = build_index(subset, ef_construction=ef_construction, M=M, ef=ef)
         mean, std = measure_latency(index, q, k=k, runs=runs)
-        levels = expected_max_level(N, M)
-        print(f"  N={N:<8}  latency={mean:.4f} +/- {std:.4f} ms/query  expected_levels={levels:.1f}")
-        results.append({"param": "N", "value": N, "latency_ms": mean, "std_ms": std, "levels": levels})
+        print(f"  N={N:<8}  latency={mean:.4f} +/- {std:.4f} ms/query")
+        results.append({"param": "N", "value": N, "latency_ms": mean, "std_ms": std})
     return results
 
 
@@ -154,7 +144,6 @@ def plot_results(all_results, out_path, defaults):
     )
 
     color_lat = "#E65100"
-    color_sec = "#1565C0"
 
     # Panel 1: k sweep (with error bars to show noise)
     ax = axes[0, 0]
@@ -188,51 +177,37 @@ def plot_results(all_results, out_path, defaults):
     ax.set_title("Effect of ef on Latency")
     ax.grid(True, alpha=0.3)
 
-    # Panel 3: M sweep (with expected levels on secondary axis)
+    # Panel 3: M sweep
     ax = axes[0, 2]
     m_data = [r for r in all_results if r["param"] == "M"]
     xs = [r["value"] for r in m_data]
     ys = [r["latency_ms"] for r in m_data]
     errs = [r.get("std_ms", 0) for r in m_data]
-    lvls = [r.get("levels", 0) for r in m_data]
     ax.errorbar(xs, ys, yerr=errs, fmt="D-", color=color_lat, linewidth=2.5,
-                markersize=8, capsize=5, capthick=1.5, ecolor="#999999", label="Latency")
+                markersize=8, capsize=5, capthick=1.5, ecolor="#999999")
+    for x, y in zip(xs, ys):
+        ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points",
+                    xytext=(0, 10), ha="center", fontsize=8)
     ax.set_xlabel("M (graph connectivity)", fontweight='bold')
-    ax.set_ylabel("Latency (ms/query)", color=color_lat, fontweight='bold')
-    ax.tick_params(axis='y', labelcolor=color_lat)
+    ax.set_ylabel("Latency (ms/query)", fontweight='bold')
     ax.grid(True, alpha=0.3)
-    if any(l > 0 for l in lvls):
-        ax2 = ax.twinx()
-        ax2.plot(xs, lvls, "^--", color=color_sec, linewidth=1.5, markersize=7, label="Expected levels")
-        ax2.set_ylabel("Expected HNSW Levels", color=color_sec, fontweight='bold')
-        ax2.tick_params(axis='y', labelcolor=color_sec)
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc="upper right")
-    ax.set_title("Effect of M on Latency & Levels")
+    ax.set_title("Effect of M on Latency")
 
-    # Panel 4: Dataset size sweep (with expected levels)
+    # Panel 4: Dataset size sweep
     ax = axes[1, 0]
     n_data = [r for r in all_results if r["param"] == "N"]
     xs = [r["value"] for r in n_data]
     ys = [r["latency_ms"] for r in n_data]
     errs = [r.get("std_ms", 0) for r in n_data]
-    lvls = [r.get("levels", 0) for r in n_data]
     ax.errorbar(xs, ys, yerr=errs, fmt="o-", color=color_lat, linewidth=2.5,
-                markersize=8, capsize=5, capthick=1.5, ecolor="#999999", label="Latency")
+                markersize=8, capsize=5, capthick=1.5, ecolor="#999999")
+    for x, y in zip(xs, ys):
+        ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points",
+                    xytext=(0, 10), ha="center", fontsize=8)
     ax.set_xlabel("Dataset Size (N vectors)", fontweight='bold')
-    ax.set_ylabel("Latency (ms/query)", color=color_lat, fontweight='bold')
-    ax.tick_params(axis='y', labelcolor=color_lat)
+    ax.set_ylabel("Latency (ms/query)", fontweight='bold')
     ax.grid(True, alpha=0.3)
-    if any(l > 0 for l in lvls):
-        ax2 = ax.twinx()
-        ax2.plot(xs, lvls, "^--", color=color_sec, linewidth=1.5, markersize=7, label="Expected levels")
-        ax2.set_ylabel("Expected HNSW Levels", color=color_sec, fontweight='bold')
-        ax2.tick_params(axis='y', labelcolor=color_sec)
-        lines1, labels1 = ax.get_legend_handles_labels()
-        lines2, labels2 = ax2.get_legend_handles_labels()
-        ax.legend(lines1 + lines2, labels1 + labels2, fontsize=8, loc="upper left")
-    ax.set_title("Effect of Dataset Size on Latency & Levels")
+    ax.set_title("Effect of Dataset Size on Latency")
 
     # Panel 5: Dimension sweep
     ax = axes[1, 1]
@@ -289,7 +264,7 @@ def plot_results(all_results, out_path, defaults):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def save_csv(all_results, csv_path):
-    fields = ["param", "value", "latency_ms", "std_ms", "levels", "mem_per_vector_kb"]
+    fields = ["param", "value", "latency_ms", "std_ms", "mem_per_vector_kb"]
     with open(csv_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
         w.writeheader()
