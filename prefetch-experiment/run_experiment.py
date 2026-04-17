@@ -93,8 +93,8 @@ def parse_result(stdout):
     return result if result["latency_ms"] is not None else None
 
 
-def _print_cache_analysis(data, ef):
-    """Print CPU cache and working set analysis from parsed worker output."""
+def _print_cache_analysis(data, ef, label):
+    """Print CPU cache and working set analysis for a specific run."""
     l1d = data.get("L1d_kb", 0)
     l2 = data.get("L2_kb", 0)
     l3 = data.get("L3_kb", 0)
@@ -104,7 +104,7 @@ def _print_cache_analysis(data, ef):
     idx_graph = data.get("index_graph_mb", 0)
     hit_ratio = data.get("hit_ratio", 1.0)
 
-    print(f"\n--- CPU Cache & Working Set Analysis ---")
+    print(f"\n--- CPU Cache & Working Set Analysis [{label}] ---")
     print(f"  L1d cache:  {l1d} KB")
     print(f"  L2 cache:   {l2} KB")
     print(f"  L3 cache:   {l3} KB")
@@ -219,17 +219,15 @@ def run_benchmark(
     )
 
     rows = []
-    cache_printed = False
 
     # Warmup runs are discarded to reduce first-run cold-start bias.
     for i in range(warmup):
         print(f"Warmup {i + 1}/{warmup}: prefetch ON")
-        parsed_warmup, _ = run_once(image_on, **_run_args)
-        if not cache_printed and parsed_warmup.get("L1d_kb", 0) > 0:
-            _print_cache_analysis(parsed_warmup, ef)
-            cache_printed = True
+        parsed_warmup_on, _ = run_once(image_on, **_run_args)
+        _print_cache_analysis(parsed_warmup_on, ef, f"warmup {i + 1}/{warmup} · Prefetch ON")
         print(f"Warmup {i + 1}/{warmup}: prefetch OFF")
-        run_once(image_off, **_run_args)
+        parsed_warmup_off, _ = run_once(image_off, **_run_args)
+        _print_cache_analysis(parsed_warmup_off, ef, f"warmup {i + 1}/{warmup} · Prefetch OFF")
 
     # Alternate ON/OFF order each cycle to reduce thermal/order bias.
     for cycle in range(1, runs + 1):
@@ -238,9 +236,8 @@ def run_benchmark(
         for mode in order:
             image  = image_on if mode == "on" else image_off
             parsed, raw = run_once(image, **_run_args)
-            if not cache_printed and parsed.get("L1d_kb", 0) > 0:
-                _print_cache_analysis(parsed, ef)
-                cache_printed = True
+            mode_label = "Prefetch ON" if mode == "on" else "Prefetch OFF"
+            _print_cache_analysis(parsed, ef, f"cycle {cycle}/{runs} · {mode_label}")
             log_path = save_raw_log(out_dir, mode, cycle, raw)
             rows.append({
                 "cycle":       cycle,
