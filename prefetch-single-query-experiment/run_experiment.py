@@ -1,4 +1,6 @@
 import argparse
+import csv
+import os
 import subprocess
 import sys
 import tempfile
@@ -182,6 +184,48 @@ def print_comparison(pq_on, pq_off, indices_used, overall_on, overall_off):
         print(f"OFF vs ON: {pct:+.2f}%  ({direction} without prefetch)")
 
 
+def save_results_csv(pq_on, pq_off, indices_used, overall_on, overall_off, csv_path):
+    """Save per-query latency results to CSV for figure generation."""
+    os.makedirs(os.path.dirname(csv_path), exist_ok=True)
+    rows = []
+    for i, (a, b) in enumerate(zip(pq_on, pq_off)):
+        diff_ms = b["latency_ms"] - a["latency_ms"]
+        pct = diff_ms / a["latency_ms"] * 100 if a["latency_ms"] > 0 else 0.0
+        same_order = a["ids"] == b["ids"]
+        overlap = len(set(a["ids"]) & set(b["ids"])) / max(1, len(a["ids"]))
+        src_idx = indices_used[i] if i < len(indices_used) else -1
+        rows.append({
+            "query_num": i,
+            "dataset_idx": src_idx,
+            "latency_on_ms": round(a["latency_ms"], 6),
+            "latency_off_ms": round(b["latency_ms"], 6),
+            "delta_ms": round(diff_ms, 6),
+            "speedup_pct": round(pct, 3),
+            "same_order": int(same_order),
+            "overlap_pct": round(overlap * 100, 2),
+        })
+    # append overall summary row
+    if overall_on is not None and overall_off is not None:
+        overall_pct = (overall_off - overall_on) / overall_on * 100 if overall_on > 0 else 0.0
+        rows.append({
+            "query_num": "OVERALL",
+            "dataset_idx": "",
+            "latency_on_ms": round(overall_on, 6),
+            "latency_off_ms": round(overall_off, 6),
+            "delta_ms": round(overall_off - overall_on, 6),
+            "speedup_pct": round(overall_pct, 3),
+            "same_order": "",
+            "overlap_pct": "",
+        })
+    fields = ["query_num", "dataset_idx", "latency_on_ms", "latency_off_ms",
+              "delta_ms", "speedup_pct", "same_order", "overlap_pct"]
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"\nResults saved: {csv_path}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ─────────────────────────────────────────────────────────────────────────────
@@ -201,6 +245,8 @@ def main():
     parser.add_argument("--python-version", default="3.10-slim")
     parser.add_argument("--skip-build", action="store_true",
                         help="Reuse existing images if they already exist")
+    parser.add_argument("--results-dir", default="results",
+                        help="Directory to save CSV results (default: results/)")
     args = parser.parse_args()
 
     dataset_path = args.dataset or find_dataset()
@@ -256,6 +302,9 @@ def main():
             print(f"WARN: number of query results differs ON={len(pq_on)} OFF={len(pq_off)}")
 
         print_comparison(pq_on, pq_off, indices_used, overall_on, overall_off)
+
+        csv_path = str(Path(args.results_dir) / "single_query_results.csv")
+        save_results_csv(pq_on, pq_off, indices_used, overall_on, overall_off, csv_path)
 
         again = input("\nRun another batch of queries? [y/N]: ").strip().lower()
         if again != "y":
