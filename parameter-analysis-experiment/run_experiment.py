@@ -145,20 +145,18 @@ def plot_results(all_results, out_path, defaults):
 
     color_lat = "#E65100"
 
-    # Panel 1: k sweep (with error bars to show noise)
+    # Panel 1: k sweep
     ax = axes[0, 0]
     k_data = [r for r in all_results if r["param"] == "k"]
     xs = [r["value"] for r in k_data]
     ys = [r["latency_ms"] for r in k_data]
-    errs = [r.get("std_ms", 0) for r in k_data]
-    ax.errorbar(xs, ys, yerr=errs, fmt="o-", color=color_lat, linewidth=2.5,
-                markersize=8, capsize=5, capthick=1.5, ecolor="#999999")
-    for x, y, e in zip(xs, ys, errs):
-        ax.annotate(f"{y:.3f}\n(\u00b1{e:.3f})", (x, y), textcoords="offset points",
+    ax.plot(xs, ys, "o-", color=color_lat, linewidth=2.5, markersize=8)
+    for x, y in zip(xs, ys):
+        ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points",
                     xytext=(0, 12), ha="center", fontsize=7)
     ax.set_xlabel("k (number of neighbors)", fontweight='bold')
     ax.set_ylabel("Latency (ms/query)", fontweight='bold')
-    ax.set_title("Effect of k on Latency\n(error bars show run-to-run variation)")
+    ax.set_title("Effect of k on Latency")
     ax.grid(True, alpha=0.3)
 
     # Panel 2: ef sweep (with error bars)
@@ -166,9 +164,7 @@ def plot_results(all_results, out_path, defaults):
     ef_data = [r for r in all_results if r["param"] == "ef"]
     xs = [r["value"] for r in ef_data]
     ys = [r["latency_ms"] for r in ef_data]
-    errs = [r.get("std_ms", 0) for r in ef_data]
-    ax.errorbar(xs, ys, yerr=errs, fmt="s-", color=color_lat, linewidth=2.5,
-                markersize=8, capsize=5, capthick=1.5, ecolor="#999999")
+    ax.plot(xs, ys, "s-", color=color_lat, linewidth=2.5, markersize=8)
     for x, y in zip(xs, ys):
         ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points",
                     xytext=(0, 10), ha="center", fontsize=8)
@@ -182,9 +178,7 @@ def plot_results(all_results, out_path, defaults):
     m_data = [r for r in all_results if r["param"] == "M"]
     xs = [r["value"] for r in m_data]
     ys = [r["latency_ms"] for r in m_data]
-    errs = [r.get("std_ms", 0) for r in m_data]
-    ax.errorbar(xs, ys, yerr=errs, fmt="D-", color=color_lat, linewidth=2.5,
-                markersize=8, capsize=5, capthick=1.5, ecolor="#999999")
+    ax.plot(xs, ys, "D-", color=color_lat, linewidth=2.5, markersize=8)
     for x, y in zip(xs, ys):
         ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points",
                     xytext=(0, 10), ha="center", fontsize=8)
@@ -198,9 +192,7 @@ def plot_results(all_results, out_path, defaults):
     n_data = [r for r in all_results if r["param"] == "N"]
     xs = [r["value"] for r in n_data]
     ys = [r["latency_ms"] for r in n_data]
-    errs = [r.get("std_ms", 0) for r in n_data]
-    ax.errorbar(xs, ys, yerr=errs, fmt="o-", color=color_lat, linewidth=2.5,
-                markersize=8, capsize=5, capthick=1.5, ecolor="#999999")
+    ax.plot(xs, ys, "o-", color=color_lat, linewidth=2.5, markersize=8)
     for x, y in zip(xs, ys):
         ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points",
                     xytext=(0, 10), ha="center", fontsize=8)
@@ -214,9 +206,7 @@ def plot_results(all_results, out_path, defaults):
     dim_data = [r for r in all_results if r["param"] == "dim"]
     xs = [r["value"] for r in dim_data]
     ys = [r["latency_ms"] for r in dim_data]
-    errs = [r.get("std_ms", 0) for r in dim_data]
-    ax.errorbar(xs, ys, yerr=errs, fmt="s-", color=color_lat, linewidth=2.5,
-                markersize=8, capsize=5, capthick=1.5, ecolor="#999999")
+    ax.plot(xs, ys, "s-", color=color_lat, linewidth=2.5, markersize=8)
     for x, y in zip(xs, ys):
         ax.annotate(f"{y:.3f}", (x, y), textcoords="offset points",
                     xytext=(0, 10), ha="center", fontsize=8)
