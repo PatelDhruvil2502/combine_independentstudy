@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import random
@@ -82,8 +83,10 @@ def main():
     ax2.legend()
     
     plt.tight_layout()
-    plt.savefig("memory_layout_visualization.png", dpi=300)
-    print("✅ Graph saved successfully to: memory_layout_visualization.png")
+    os.makedirs("results", exist_ok=True)
+    out_path = "results/memory_layout_visualization.png"
+    plt.savefig(out_path, dpi=300)
+    print(f"Graph saved: {out_path}")
 
 if __name__ == "__main__":
     main()

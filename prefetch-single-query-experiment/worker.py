@@ -41,8 +41,10 @@ def main():
 
     print(f"DATASET_INFO,{num_elements},{dim}")
 
-    # Single-query warmup reduces first-query cold-start bias without affecting measured queries.
-    warmup_q = np.zeros((1, dim), dtype=np.float32)
+    # Single-query warmup reduces first-query cold-start bias. Use the first
+    # real query (not a zero vector — zero vectors land in unrepresentative
+    # regions of the graph and skew the warmup's traversal pattern).
+    warmup_q = queries[0:1].astype(np.float32, copy=False)
     index.knn_query(warmup_q, k=k, num_threads=num_threads)
 
     per_query_ms = []

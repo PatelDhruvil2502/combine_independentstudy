@@ -326,7 +326,8 @@ def _safe_mean(vals):
     return statistics.mean(valid) if valid else 0.0
 
 
-def plot_comparison(rows, out_path, ef, num_elements, dim):
+def plot_comparison(rows, out_path, ef, num_elements, dim,
+                    cache_info=None, working_set=None):
     import statistics
     import subprocess
     import sys
@@ -347,16 +348,34 @@ def plot_comparison(rows, out_path, ef, num_elements, dim):
     off_p95 = _safe_mean([r["p95_ms"] for r in off_rows])
     off_p99 = _safe_mean([r["p99_ms"] for r in off_rows])
 
+    on_hit  = _safe_mean([r.get("hit_ratio", -1.0) for r in on_rows])
+    off_hit = _safe_mean([r.get("hit_ratio", -1.0) for r in off_rows])
+
     color_on  = "#2196F3"
     color_off = "#F44336"
 
     n_label = f"{num_elements // 1000} K" if num_elements >= 1000 else str(num_elements)
+
+    # Hardware subtitle
+    hw_line = ""
+    if cache_info:
+        l1d, l2, l3 = cache_info.get("L1d_kb", 0), cache_info.get("L2_kb", 0), cache_info.get("L3_kb", 0)
+        if l1d > 0:
+            hw_line = f"L1d={l1d} KB · L2={l2} KB · L3={l3} KB"
+    if working_set:
+        ws = working_set.get("per_query_ws_kb", 0)
+        idx_mb = working_set.get("total_index_mb", 0)
+        if ws > 0:
+            hw_line += f"  |  per-query WS={ws:.0f} KB  |  index={idx_mb:.0f} MB"
+
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-    fig.suptitle(
+    title = (
         "HNSW Prefetch ON vs OFF — Per-query Latency Benchmark\n"
-        f"({n_label} vectors · {dim}-dim · ef={ef} · real measured runs)",
-        fontsize=11,
+        f"({n_label} vectors · {dim}-dim · ef={ef} · real measured runs)"
     )
+    if hw_line:
+        title += f"\nHardware context: {hw_line}"
+    fig.suptitle(title, fontsize=10)
 
     # ── Panel 1: Grouped bar chart (mean, p50, p95, p99) ─────────────────────
     ax1 = axes[0]
@@ -382,6 +401,17 @@ def plot_comparison(rows, out_path, ef, num_elements, dim):
     ax1.grid(axis="y", alpha=0.3)
     ax1.set_ylim(0, max(on_bars_val + off_bars_val) * 1.25)
 
+    # Annotate RAM hit ratio at bottom of Panel 1 (shows no swap pressure)
+    if on_hit > 0 or off_hit > 0:
+        ax1.text(
+            0.02, 0.98,
+            f"RAM hit ratio  ON: {on_hit:.4f}  ·  OFF: {off_hit:.4f}\n"
+            f"(=1.0 → all index pages in DRAM, no swap pressure)",
+            transform=ax1.transAxes, va="top", ha="left", fontsize=7,
+            bbox=dict(boxstyle='round,pad=0.3', facecolor='lightyellow',
+                      edgecolor='gray', alpha=0.8),
+        )
+
     # ── Panel 2: Per-cycle mean latency line ──────────────────────────────────
     ax2 = axes[1]
     on_idx  = list(range(1, len(on_vals) + 1))
@@ -398,6 +428,9 @@ def plot_comparison(rows, out_path, ef, num_elements, dim):
     ax2.legend(fontsize=8)
     ax2.grid(axis="y", alpha=0.3)
     ax2.set_xticks(on_idx)
+    # Y-axis starts at 0 so noise doesn't visually dominate
+    y_max = max(on_vals + off_vals) if (on_vals or off_vals) else 1
+    ax2.set_ylim(0, y_max * 1.25)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -448,6 +481,12 @@ def plot_scaling(scaling_data, out_path):
     ax1.set_ylabel("Prefetch speedup (%)\n(positive = prefetch ON is faster)")
     ax1.set_title("How prefetch benefit scales with graph size")
     ax1.grid(alpha=0.3)
+    # Y-axis bounded: lower=min(0, min_speedup) so origin is visible; upper has headroom
+    if speedups:
+        sp_max = max(speedups)
+        sp_min = min(min(speedups), 0)
+        margin = max(abs(sp_max - sp_min) * 0.15, 1)
+        ax1.set_ylim(sp_min - margin, sp_max + margin * 2)
 
     # Panel 2: absolute mean latency for ON and OFF
     ax2.plot(sizes, on_vals,  "o-",  color=color_on,  linewidth=2, markersize=8, label="Prefetch ON")
@@ -457,6 +496,9 @@ def plot_scaling(scaling_data, out_path):
     ax2.set_title("Absolute latency vs. index size")
     ax2.legend(fontsize=9)
     ax2.grid(alpha=0.3)
+    # Y-axis starts at 0
+    y_max = max(on_vals + off_vals) if (on_vals or off_vals) else 1
+    ax2.set_ylim(0, y_max * 1.2)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150)
@@ -660,7 +702,24 @@ def main():
         oldest = min(existing, key=lambda p: p.stat().st_mtime)
         n = int(oldest.stem.split("_")[1])
     plot_path = out_dir / f"output_{n}.png"
-    plot_comparison(rows, plot_path, ef=args.ef, num_elements=num_elements, dim=dim)
+    # Pull hardware context from the most recent ON-mode raw log so the figure
+    # title can show CPU caches + working set + index size.
+    cache_info, working_set = {}, {}
+    on_logs = sorted(out_dir.glob("on_cycle_*.log"))
+    if on_logs:
+        last_log = on_logs[-1].read_text()
+        for line in last_log.splitlines():
+            if line.startswith("CACHE_INFO,"):
+                parts = line.split(",")
+                cache_info = {"L1d_kb": int(parts[1]), "L2_kb": int(parts[2]), "L3_kb": int(parts[3])}
+            elif line.startswith("WORKING_SET,"):
+                parts = line.split(",")
+                working_set = {
+                    "per_query_ws_kb": float(parts[1]),
+                    "total_index_mb":  float(parts[2]),
+                }
+    plot_comparison(rows, plot_path, ef=args.ef, num_elements=num_elements, dim=dim,
+                    cache_info=cache_info, working_set=working_set)
     print_raw_results(rows)
 
     print("\nNo aggregated math is printed. Only raw measured runs are reported.")

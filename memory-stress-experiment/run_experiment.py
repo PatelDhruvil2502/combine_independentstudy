@@ -208,7 +208,7 @@ def run_experiment(image_name, args):
                 "majflt": None, "minflt": None,
                 "io_read_mb": None, "io_write_mb": None,
                 "vm_rss_kb": None, "vm_swap_kb": None,
-                "hit_ratio": 0.0,
+                "hit_ratio": None,  # crash → no measurement, distinct from "0% in RAM"
             })
             break
 
